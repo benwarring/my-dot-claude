@@ -1,0 +1,13 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor settings
+.vscode/
+.idea/
+
+# Pipeline state, if the pipeline is ever run inside this repo
+.pipeline/
+
+# Local Claude Code settings
+.claude/settings.local.json
