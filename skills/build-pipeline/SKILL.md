@@ -1,6 +1,6 @@
 ---
 name: build-pipeline
-description: Build code with a managed pipeline of subagents. Opus writers produce each file, standards and security reviewers check it (escalating from Haiku to Sonnet to Opus as needed), Opus fixers address failures, and Opus test-writers write and run tests.
+description: Build code with a managed pipeline of subagents. Opus writers produce each file, standards and security reviewers check it (escalating from Haiku to Sonnet to Opus as needed), Opus fixers address failures, and Opus test-writers write and run tests. Each file is built and committed on its own branch, and the manager merges them all at the end for the user to push.
 disable-model-invocation: true
 ---
 
@@ -66,6 +66,8 @@ and empty `plan.md` and `helpers.md` files ready for you to fill in.
 │   ├── standards-log.md  (you write it)
 │   └── security-log.md   (you write it)
 ├── test-runs/            full test output (the test-writer writes it)
+├── worktrees/            one git worktree per file, plus _integration
+├── git-run               the run's branch names (the git script writes it)
 └── archive/              earlier runs, moved here by `--fresh`
 ```
 
@@ -75,7 +77,58 @@ keeps them from overwriting each other.
 
 If the setup report says `.pipeline/ git-ignored: no`, ask the user
 whether to add it to `.gitignore`. Don't edit `.gitignore` without
-asking.
+asking. It must be ignored one way or the other, because the worktrees
+live in it: if the user would rather not change `.gitignore`, add
+`.pipeline/` to `.git/info/exclude`, which stays on this machine.
+
+## Branches and worktrees
+
+Every file is built on its own branch, in its own git worktree, so work
+in progress never touches the branch the run started on:
+
+- After the user approves the plan, the git script creates an
+  **integration branch** from the current branch, checked out in
+  `.pipeline/worktrees/_integration`.
+- Each file gets a branch and worktree made from the integration branch,
+  so it starts with every file that has already passed. All of that
+  file's agents work in its worktree.
+- When a file passes both reviews and its tests, the test-writer commits
+  it on the file's branch, and you merge that branch into the
+  integration branch.
+- When every file is done, you merge the integration branch into the
+  branch the run started on. The user pushes. You never push.
+
+Run the git script from the project root with the Bash tool, using the
+path from the setup report's `Git script:` line. It picks the names and
+folders, so don't do these steps with git by hand.
+
+| Command | When |
+|---------|------|
+| `start` | Once, after the user approves the plan |
+| `file "<label>"` | Before spawning a file's writer. Prints the worktree's absolute path. |
+| `integrate "<label>"` | After the test-writer commits the file |
+| `finish "<message>"` | Phase 4, once the user agrees to merge |
+
+`<label>` is the file's cell in `plan.md`, such as `src/cli.py (M2)`.
+Every command is safe to repeat, so after a compaction you can call
+`file` again to get a worktree's path.
+
+Give every agent for a file its worktree path, along with the file path
+relative to the project root as before. The agents read and write the
+file inside the worktree and treat the worktree as the project.
+`.pipeline/` stays at the project root.
+
+If you add or change files yourself (docs, empty package files), do it
+in the integration worktree and commit there.
+
+**Worktrees hold only tracked files.** Virtual environments,
+`node_modules`, build output, and `.env` files stay in the main
+checkout. An editable install also points at the main checkout's code,
+not the worktree's. So the test command has to run inside a worktree
+against that worktree's code, for example by calling the main
+checkout's interpreter by absolute path with the worktree's source first
+on the import path. Tests that quietly run the main checkout's code
+would pass or fail for the wrong file.
 
 ## Keeping your context lean
 
@@ -95,18 +148,28 @@ failure that's still unclear). If your context gets compacted,
    run the setup script again with `--fresh`, which moves the earlier
    run into `.pipeline/archive/` and keeps the project overrides. If the
    tables are empty, carry on as a new run.
-2. Look at the project's layout, language, and existing helpers just
+2. Check the setup report's `Git:` line. The pipeline needs a git repo,
+   on a branch, with no uncommitted changes. If any of that is missing,
+   ask the user to fix it (`git init`, check out a branch, or commit or
+   stash their changes) before you go on.
+3. Look at the project's layout, language, and existing helpers just
    enough to plan.
-3. Find the test setup: framework, where tests live, and the run
-   command. If the project has none, ask the user what to use.
-4. Split the job into files. For each file, decide what it does, what
-   it depends on, and its risk level (see `escalation.md`).
-5. Find **shared helpers**: logic that two or more planned files will
+4. Find the test setup: framework, where tests live, and a run command
+   that works inside a worktree (see Branches and worktrees). If the
+   project has none, ask the user what to use.
+5. Split the job into files. For each file, decide what it does, what
+   it depends on, and its risk level (see `escalation.md`). A row that
+   changes a file an earlier row created (such as `cli.py (M2)` after
+   `cli.py`) depends on that row.
+6. Find **shared helpers**: logic that two or more planned files will
    need. Put them in their own files. They're built first, because
    writers running in parallel can't see each other's new code.
-6. Fill in `.pipeline/plan.md` in the format below.
-7. Show the user the plan (files, risk levels, shared helpers) and
+7. Fill in `.pipeline/plan.md` in the format below.
+8. Show the user the plan (files, risk levels, shared helpers) and
    **wait for their approval** before spawning any subagents.
+9. Run the git script's `start` and copy the base and integration
+   branches into `plan.md`. Then try the test command in the integration
+   worktree, and check that it runs that worktree's code.
 
 ### plan.md format
 
@@ -114,7 +177,8 @@ failure that's still unclear). If your context gets compacted,
 # Pipeline Plan
 
 **Job:** Add CSV import for customer records.
-**Tests:** pytest, tests/ mirrors src/, run with `pytest <test file>`
+**Tests:** pytest, tests/ mirrors src/, run in a worktree with `C:/proj/.venv/Scripts/python -m pytest <test file>` and `PYTHONPATH=src`
+**Git:** base `main`, integration `pipeline/20261109-153000/_integration`
 
 ## Shared helpers
 
@@ -132,17 +196,18 @@ failure that's still unclear). If your context gets compacted,
 
 **Status** is one of: `planned`, `writing`, `reviewing`, `fixing`,
 `testing`, `done`, `flagged`, `blocked`. Update it every time a file
-moves.
+moves. `done` means the file is committed and merged into the
+integration branch.
 
 You don't need to track the current review tier. It's the tier on the
 file's latest round in each log, because tiers never go back down.
 
 ## Phase 2: Shared helpers
 
-Run each shared helper file through the whole pipeline (Phase 3) before
-spawning any writer that depends on it. Once its reviews pass, add its
-helpers to `helpers.md` so the next writers can find them. Its tests can
-run alongside the later phases.
+Run each shared helper file through the whole pipeline (Phase 3), and
+don't start any file that depends on it until it's `done`. New
+worktrees are made from the integration branch, so a helper's code
+reaches other files only once it's merged there.
 
 If nothing depends on anything else, skip straight to Phase 3.
 
@@ -150,11 +215,13 @@ If nothing depends on anything else, skip straight to Phase 3.
 
 Process files whose dependencies are done, a few at a time (about four).
 Spawn subagents in the background and handle each result as it arrives.
-Use the agent's name from `agents/` as the subagent type.
+Use the agent's name from `agents/` as the subagent type. Every agent
+for a file also gets the file's worktree path.
 
 ### 1. Write
 
-Spawn `file-writer` with:
+Run the git script's `file "<label>"` to create the file's branch and
+worktree. Then spawn `file-writer` with:
 - the file path and its purpose from `plan.md`
 - what its dependencies provide (point to `helpers.md`)
 - absolute paths to `standards.md` and `security.md`
@@ -194,7 +261,7 @@ Once both reviews have a final verdict:
 
 | Standards | Security | Next |
 |-----------|----------|------|
-| PASS | PASS | Step 4: Register helpers and test |
+| PASS | PASS | Step 4: Test, commit, and merge |
 | FAIL | either | Step 3: Fix |
 | either | FAIL | Step 3: Fix |
 
@@ -217,15 +284,23 @@ When it returns:
 Then go back to step 2 and run **both** reviews again, since a fix for
 one review can break something the other one checks.
 
-### 4. Register helpers and test
+### 4. Test, commit, and merge
 
-1. Add the file's public helpers to `helpers.md` (format below), using
-   the writer's and fixers' New helpers lists.
-2. Spawn `test-writer` with the file path, the test setup from
-   `plan.md`, and the absolute path to `standards.md`.
+Spawn `test-writer` with the file path, the test setup from `plan.md`,
+the absolute path to `standards.md`, and a commit message:
+`<label>: <purpose>`, both from `plan.md`. If every test passes, it
+commits the file and its tests on the file's branch.
 
 When it returns:
-- `pass`: set the file to `done`.
+- `pass` with a commit hash:
+  1. Run the git script's `integrate "<label>"`. If the merge fails, set
+     the file to `blocked` and tell the user which files conflict. The
+     integration branch is left as it was.
+  2. Add the file's public helpers to `helpers.md` (format below), using
+     the writer's and fixers' New helpers lists.
+  3. Set the file to `done`.
+- `pass` with `Committed: no`: the commit was rejected, usually by a
+  pre-commit hook. Treat the hook's output like a code bug (below).
 - `blocked`: ask the user how to proceed.
 - `fail`: sort each failure using its `Likely:` line.
   - **Test bug:** spawn `test-writer` again, naming the tests you've
@@ -252,15 +327,28 @@ logic.
 - `parse_iso(value: str) -> datetime`: parses an ISO timestamp with timezone.
 ```
 
-One `##` heading per file, in the order files passed review. Add only
+One `##` heading per file, in the order files were merged. Add only
 public helpers that other files could reuse.
 
 ---
 
-## Phase 4: Report
+## Phase 4: Merge and report
 
-When every file is `done`, `flagged`, or `blocked`, give the user:
+When every file is `done`, `flagged`, or `blocked`:
 
+1. If any file isn't `done`, ask the user whether to merge the files
+   that are, or stop without merging. Files that aren't `done` were
+   never merged into the integration branch, so merging leaves them out.
+2. Run the git script's `finish "<message>"`, with a one-line summary of
+   the job as the message. It merges the integration branch into the
+   branch the run started on, then removes clean worktrees and merged
+   branches. It keeps worktrees with uncommitted work and branches that
+   weren't merged. If the merge fails, nothing changes. Tell the user
+   which files conflict.
+3. Report to the user:
+
+- the branch the work was merged into, and any worktrees or branches the
+  script kept, with the reason
 - each file and its final status, with fix rounds used and the highest
   review tier it reached
 - **Needs human review**: every file an Opus reviewer asked to escalate,
@@ -271,5 +359,9 @@ When every file is `done`, `flagged`, or `blocked`, give the user:
 - test results: tests written, passing, and any still failing
 - how many suggestions were logged, with the logs' paths, since
   suggestions never block a file
+- anything you installed that points at a worktree (such as an editable
+  install), which the user should reinstall from the main checkout
 
-Keep it short. The logs hold the detail.
+Keep it short. The logs hold the detail. End by telling the user that
+the work is merged locally, nothing has been pushed, and they can push
+it with `git push`.

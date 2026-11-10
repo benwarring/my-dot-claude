@@ -32,7 +32,8 @@ your description and shows it to you before building anything. If the
 description is too vague to plan from, it asks you questions first.
 
 Run the manager session on Opus. It does the planning and makes the
-judgment calls.
+judgment calls. The project must be a git repo with no uncommitted
+changes.
 
 ### What happens
 
@@ -44,18 +45,30 @@ judgment calls.
    shared helpers. It shows you the plan and **waits for your approval**.
    Nothing is written before you approve.
 3. **Build.** Shared helpers are built first, then the other files, about
-   four at a time. Each file is written, reviewed for standards and
-   security, fixed if a review fails (up to 3 rounds), and then tested.
-4. **Report.** Each file's final status, anything that needs your
-   attention, and test results.
+   four at a time. Each file gets its own git branch and worktree, where
+   it's written, reviewed for standards and security, fixed if a review
+   fails (up to 3 rounds), and then tested. When its tests pass, the
+   file and its tests are committed on its branch.
+4. **Merge and report.** Once every file is committed, the manager
+   merges them all into the branch you started on (usually `main`) and
+   reports each file's final status, anything that needs your
+   attention, and test results. **Nothing is pushed.** You review the
+   result and run `git push` yourself.
 
 ### When the manager stops to ask you
 
 - To approve the plan.
-- Whether to add `.pipeline/` to `.gitignore`, if it isn't there.
+- To commit or stash your changes first, if the project has uncommitted
+  changes (or to run `git init`, if it isn't a repo yet).
+- Whether to add `.pipeline/` to `.gitignore`, if it isn't there. It
+  has to be ignored, so if you say no, it goes in `.git/info/exclude`,
+  which stays on your machine.
 - Whether to resume or start fresh, if an earlier run exists.
 - Which test framework to use, if the project doesn't have one.
-- When a file still fails after 3 fix rounds, or a subagent is blocked.
+- When a file still fails after 3 fix rounds, a subagent is blocked, or
+  a file's branch won't merge cleanly.
+- Before merging, if some files didn't finish: merge the ones that did,
+  or stop without merging.
 - Right away, if a review finds a committed secret. Removing it from the
   code isn't enough; **rotate the key**.
 
@@ -64,12 +77,17 @@ judgment calls.
 - `.pipeline/plan.md`: every file and its current status.
 - `.pipeline/logs/standards-log.md` and `.pipeline/logs/security-log.md`:
   a plain-language summary of every review round, plus the issues found.
+- `git log --graph --oneline --all`: each finished file as a commit on
+  its own `pipeline/<run>/...` branch, merged into the run's integration
+  branch.
 
 ### Resuming or starting over
 
 Run `/build-pipeline` again in the same project. The manager sees the
 earlier run and asks whether to resume it or start fresh. Starting fresh
-moves the old plan, logs, and test output into `.pipeline/archive/`.
+moves the old plan, logs, test output, and worktrees into
+`.pipeline/archive/`. The old run's branches stay in git, so delete them
+yourself if you don't need them.
 
 ### Project-specific rules
 
@@ -83,6 +101,7 @@ You need:
 
 - Claude Code, with access to Opus, Sonnet, and Haiku.
 - bash. On Windows, that's the Git Bash that Claude Code already uses.
+- git 2.17 or later, for worktrees.
 
 Clone the repo anywhere, then link its pieces into `~/.claude`. Don't
 make `~/.claude` itself the repo, because Claude Code also keeps its
@@ -133,11 +152,31 @@ it has should list the pipeline agents.
 | `standards-reviewer-{haiku,sonnet,opus}` | Varies | Checks one file against `standards.md` |
 | `security-reviewer-{haiku,sonnet,opus}` | Varies | Checks one file against `security.md` |
 | `file-fixer` | Opus | Fixes the blocking issues from a failed review or test |
-| `test-writer` | Opus | Writes and runs tests, never edits the source |
+| `test-writer` | Opus | Writes and runs tests, commits the file when they pass, never edits the source |
 
 Reviewers can read the project but not change it. Each one returns its
 log entry to the manager, and only the manager writes the logs, so
 reviewers running in parallel can't overwrite each other.
+
+### Branches
+
+When you approve the plan, the manager creates an integration branch
+from your current branch. Each file then gets its own branch and
+worktree (in `.pipeline/worktrees/`), made from the integration branch,
+so it starts with every file that has already passed. All of that
+file's agents work there, so files in progress never touch your branch
+or each other.
+
+When a file passes its reviews and tests, the test-writer commits it,
+and the manager merges the file's branch into the integration branch.
+At the end, the manager merges the integration branch into your branch,
+then removes the worktrees and branches it no longer needs. It keeps
+anything with unfinished work so you can look at it.
+
+Worktrees contain only files git tracks, so virtual environments and
+`node_modules` stay in your main checkout. The manager works out a test
+command that runs each worktree's own code, and checks it before any
+tests are written.
 
 ### Reviews
 
@@ -196,7 +235,8 @@ my-dot-claude/
 └── skills/build-pipeline/
     ├── SKILL.md                  the manager's playbook
     ├── scripts/
-    │   └── init-pipeline.sh      creates .pipeline/ in the target project
+    │   ├── init-pipeline.sh      creates .pipeline/ in the target project
+    │   └── pipeline-git.sh       branches, worktrees, and merges for a run
     └── references/
         ├── standards.md          code standards rulebook
         ├── security.md           security rulebook

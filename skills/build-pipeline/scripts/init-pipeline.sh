@@ -4,20 +4,21 @@
 # Creates any missing folders and files, and never overwrites existing
 # ones, so it's safe to run on a project with a run already in progress.
 # Prints a short report for the manager: what was created, whether an
-# earlier run exists, whether .pipeline/ is git-ignored, and the absolute
-# paths of the reference files to pass to subagents.
+# earlier run exists, the git state, and the absolute paths of the
+# reference files and git script.
 #
 # Usage: init-pipeline.sh [--fresh] [project-root]
-#   --fresh       Move an earlier run's plan, helpers, logs, and test output
-#                 into .pipeline/archive/<timestamp>/ before setting up.
-#                 Project overrides (standards.md, security.md) stay put.
+#   --fresh       Move an earlier run's plan, helpers, logs, test output,
+#                 and worktrees into .pipeline/archive/<timestamp>/ before
+#                 setting up. That run's branches stay in git. Project
+#                 overrides (standards.md, security.md) stay put.
 #   project-root  Defaults to the current directory.
 
 set -euo pipefail
 
 # Files and folders that belong to a single run, as opposed to the
 # project's overrides, which carry over between runs.
-RUN_STATE=(plan.md helpers.md logs test-runs)
+RUN_STATE=(plan.md helpers.md logs test-runs worktrees git-run)
 
 # Prints a directory's absolute path. On Git Bash for Windows, `pwd -W`
 # gives the C:/... form that Windows tools can open. Elsewhere it fails,
@@ -78,6 +79,8 @@ if $fresh && [[ -e .pipeline/plan.md ]]; then
       mv ".pipeline/$item" "$archived/"
     fi
   done
+  # The moved worktrees are plain folders now; drop git's records of them.
+  git worktree prune 2>/dev/null || true
 fi
 
 earlier_run=no
@@ -121,10 +124,17 @@ make_file .pipeline/logs/security-log.md '# SECURITY REVIEWER LOG
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   ignored="not a git repo"
-elif git check-ignore -q .pipeline/; then
-  ignored=yes
+  git_state="not a git repo"
 else
-  ignored=no
+  if git check-ignore -q .pipeline/; then
+    ignored=yes
+  else
+    ignored=no
+  fi
+  branch="$(git symbolic-ref --short -q HEAD || echo "detached HEAD")"
+  # .pipeline/ itself shows up as a change until it's ignored; don't count it.
+  changes="$(git status --porcelain | grep -vc '\.pipeline/$' || true)"
+  git_state="branch $branch, $changes uncommitted changes"
 fi
 
 overrides=()
@@ -144,7 +154,9 @@ echo "Created: $(join_or_none "${created[@]}")"
 echo "Already existed: $(join_or_none "${existing[@]}")"
 echo "Project overrides: $(join_or_none "${overrides[@]}")"
 echo ".pipeline/ git-ignored: $ignored"
+echo "Git: $git_state"
 echo "Reference files:"
 for ref in standards security log-format escalation; do
   echo "  $ref.md: $skill_dir/references/$ref.md"
 done
+echo "Git script: $skill_dir/scripts/pipeline-git.sh"

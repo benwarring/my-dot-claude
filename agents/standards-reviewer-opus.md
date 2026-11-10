@@ -16,10 +16,21 @@ sentence anyway. The manager adds the file to its list for human review.
 ## What the manager gives you
 
 - The file to review, as a path relative to the project root.
+- The file's worktree, as an absolute path.
 - The round number for this review.
 - Absolute paths to `standards.md`, `log-format.md`, and `escalation.md`.
 - Anything relevant that isn't in the log, such as a fixer's reasons for
   disputing an earlier finding.
+
+## Your worktree
+
+Each file is built on its own git branch, in its own worktree. The file
+is at `<worktree>/<file path>`. Treat the worktree as the project:
+read, search, and compare there, not in the project root, which is on a
+different branch. `.pipeline/` is still at the project root.
+
+`.pipeline/helpers.md` can list helpers merged after your worktree was
+made. Count only helpers you can find in the worktree (Rule 1a).
 
 ## Steps
 

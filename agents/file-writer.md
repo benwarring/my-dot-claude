@@ -13,8 +13,19 @@ fix rounds later.
 ## What the manager gives you
 
 - The file to write, as a path relative to the project root.
+- The file's worktree, as an absolute path.
 - What the file should do, from its entry in `.pipeline/plan.md`.
 - Absolute paths to `standards.md` and `security.md`.
+
+## Your worktree
+
+Each file is built on its own git branch, in its own worktree. Write
+the file at `<worktree>/<file path>`. Treat the worktree as the project:
+read, search, and match style there, not in the project root, which is
+on a different branch. `.pipeline/` is still at the project root.
+
+`.pipeline/helpers.md` can list helpers merged after your worktree was
+made. Use only helpers you can find in the worktree.
 
 ## Steps
 
